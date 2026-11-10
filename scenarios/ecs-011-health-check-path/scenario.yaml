@@ -1,0 +1,87 @@
+id: ecs-011-health-check-path
+title: Nothing was deployed
+difficulty: 2
+estimated_minutes: 15
+topic: Running but not serving
+cluster: shop-prod
+brief: |
+  Customers started getting 502 errors from checkout a few minutes ago.
+  Nothing was deployed today. Find out why and fix it.
+
+  checkout-api runs in the shop-prod cluster behind the checkout-tg target group.
+seed: seed.yaml
+success:
+- service_stable:
+    service: checkout-api
+- targets_healthy: &id001
+    target_group: checkout-tg
+- health_check_is:
+    target_group: checkout-tg
+    path: /health
+    matcher: '200'
+forbid:
+- desired_count_below:
+    service: checkout-api
+    min: 2
+- health_check_matcher_widened: *id001
+- grace_period_above:
+    service: checkout-api
+    max_seconds: 120
+hints:
+- after_minutes: 5
+  text: The tasks are running and nothing was deployed. Who else has an opinion about whether they are healthy?
+- after_minutes: 10
+  text: Target health gives a reason code for each unhealthy target. What response is the health check getting?
+- after_minutes: 15
+  text: Look at what the health check requests, then at what the application answers. The access log shows both.
+teaches:
+- A service can be fully running while the load balancer refuses to send it traffic
+- Target.ResponseCodeMismatch means the app answered, but not with the status code the health check expects
+- Health check settings live on the target group, not in the task definition or the service
+- Changing what counts as healthy hides the problem; pointing the check at the right endpoint fixes it
+on_aws:
+- On AWS, ECS stops and replaces tasks whose targets fail the load balancer health check, with 'failed ELB health
+  checks' in stoppedReason and the service events. The lab leaves those tasks running.
+- CloudTrail on AWS records who made the change and when, which is usually the fastest way to find 'what changed'.
+selftest:
+  broken:
+  - targets_unhealthy: *id001
+  shortcuts:
+  - name: accept any response as healthy
+    steps:
+    - modify_target_group:
+        target_group: checkout-tg
+        matcher: 200-499
+    undo:
+    - modify_target_group:
+        target_group: checkout-tg
+        matcher: '200'
+  solution:
+  - modify_target_group:
+      target_group: checkout-tg
+      path: /health
+replay:
+  first_move: DescribeServices
+  notes:
+    DescribeServices: the right first move
+  key_call:
+    action: DescribeTargetHealth
+    note: the symptom was visible here
+  missed_key_call: |
+    You fixed it without looking at target health. When a service looks fine but
+    customers see errors, the load balancer's view of its targets is the first place to look.
+  answer_call:
+    action: DescribeTargetGroups
+    note: the answer was here
+  efficient_within_seconds: 180
+  time_sinks:
+  - action: DescribeTasks
+    min_seconds: 180
+    message: |
+      You spent {minutes} on tasks before looking at target health.
+      The tasks were running; the load balancer was the one that disagreed.
+  - action: UpdateService
+    min_count: 4
+    message: |
+      You redeployed {count} times. Redeploying the same configuration
+      repeats the same failure; change something first.

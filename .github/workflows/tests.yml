@@ -1,0 +1,37 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -e '.[dev]' pyflakes
+      - run: python -m pyflakes ecslab tests
+      - run: pytest -q
+      - name: Walkthroughs match the tested solutions
+        run: python -m ecslab.solution && git diff --exit-code -- scenarios
+
+  # The end-to-end proof needs Docker and takes over an hour, so it runs on demand.
+  selftest:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+      - run: ecslab start
+      - run: ecslab selftest

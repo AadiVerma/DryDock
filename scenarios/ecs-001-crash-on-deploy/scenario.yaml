@@ -1,0 +1,135 @@
+id: ecs-001-crash-on-deploy
+title: The deployment that never finishes
+difficulty: 2
+estimated_minutes: 20
+topic: Tasks that start and then die
+cluster: shop-prod
+brief: |
+  The team pushed a new image. Deploy checkout-api:8 to production.
+
+  checkout-api runs in the shop-prod cluster behind the checkout-tg target
+  group. Revision 7 is live and healthy. Revision 8 is already registered.
+seed: seed.yaml
+
+success:
+  - service_stable: { service: checkout-api }
+  - targets_healthy: { target_group: checkout-tg }
+  - task_def_lineage: { service: checkout-api, derived_from: 8 }
+
+forbid:
+  - desired_count_below: { service: checkout-api, min: 2 }
+  - health_check_disabled: { target_group: checkout-tg }
+  - health_check_matcher_widened: { target_group: checkout-tg }
+  - grace_period_above: { service: checkout-api, max_seconds: 120 }
+
+partial:
+  - rolled_back:
+      when: { task_def_lineage_is: { service: checkout-api, revision: 7 } }
+      message: |
+        You rolled back, which is the right call during an incident.
+        Now fix revision 8 and deploy it properly.
+
+hints:
+  - after_minutes: 5
+    text: The service reports 2 of 2 running. Which task definition are those running tasks actually on?
+  - after_minutes: 10
+    text: A stopped task knows why it stopped, and what its container's exit code was.
+  - after_minutes: 15
+    text: The container said something before it died. Its task definition says where its logs go, and the log stream is named after the task ID.
+
+teaches:
+  - A service can report its full running count while a deployment is failing; check which revision the running tasks belong to
+  - stoppedReason and the container exit code tell you a task crashed
+  - The container's own logs tell you why
+  - A new image can need configuration the old task definition never had
+
+# Machine-checkable proof that this scenario works end to end. `ecslab selftest`
+# runs it against the real emulator: seed, spring the trap, confirm the fault,
+# confirm every shortcut is rejected, apply the solution, confirm it passes.
+on_aws:
+- 'A crash-looping service is slowed down on AWS: ECS waits longer between launches after repeated failures. The
+  lab relaunches every few seconds.'
+- The service's Events tab on AWS names the failure (for example 'tasks failed to start'). In the lab, events only
+  ever say the service reached a steady state.
+- With the deployment circuit breaker enabled, AWS marks the deployment FAILED and rolls back by itself. The lab
+  always reports the rollout as completed, so never trust that field here.
+selftest:
+  trap:
+    - update_service: { service: checkout-api, task_definition: "checkout-api:8" }
+  broken:
+    - stopped_task_with: { service: checkout-api, stopped_reason_contains: Essential container, exit_code: 1 }
+    - log_contains: { log_group: /ecs/checkout-api, text: "FATAL: missing required environment variable PAYMENTS_API_URL" }
+    - not: { task_def_lineage_is: { service: checkout-api, revision: 7 } }
+  shortcuts:
+    - name: roll back to revision 7
+      expect: partial
+      steps:
+        - update_service: { service: checkout-api, task_definition: "checkout-api:7" }
+      undo:
+        - update_service: { service: checkout-api, task_definition: "checkout-api:8" }
+    - name: scale to zero
+      steps:
+        - update_service: { service: checkout-api, desired_count: 0 }
+      undo:
+        - update_service: { service: checkout-api, desired_count: 2 }
+    - name: widen the health check matcher
+      steps:
+        - modify_target_group: { target_group: checkout-tg, matcher: "200-599" }
+      undo:
+        - modify_target_group: { target_group: checkout-tg, matcher: "200" }
+    - name: long grace period
+      steps:
+        - update_service: { service: checkout-api, grace_period_seconds: 3600 }
+      undo:
+        - update_service: { service: checkout-api, grace_period_seconds: 0 }
+  solution:
+    - register_revision:
+        base: "checkout-api:8"
+        set_env: { PAYMENTS_API_URL: "https://payments.shop.internal" }
+    - update_service: { service: checkout-api, task_definition: "checkout-api:latest" }
+
+# Rules for the replay printed on success. No model involved: the learner's
+# call log is compared against this.
+replay:
+  first_move: DescribeServices
+  notes:
+    DescribeServices: the right first move
+  key_call:
+    action: DescribeTasks
+    detail: stopped
+    note: the crash was visible here
+  answer_call:
+    action: GetLogEvents
+    alternatives: [FilterLogEvents, StartLiveTail]
+    note: the answer was here
+  # Reaching a stopped task within this long of the broken deploy counts as efficient.
+  efficient_within_seconds: 180
+  efficient_path:
+    - UpdateService
+    - DescribeServices
+    - ListTasks (stopped)
+    - DescribeTasks
+    - GetLogEvents
+    - RegisterTaskDefinition
+    - UpdateService
+  time_sinks:
+    - action: DescribeTargetHealth
+      min_seconds: 120
+      message: |
+        You spent {minutes} on target health before reading a stopped task.
+        Unhealthy or missing targets are a symptom here: there was no task
+        alive long enough to be healthy.
+    - action: DescribeServices
+      min_seconds: 180
+      message: |
+        You spent {minutes} re-reading the service before reading a stopped task.
+        The service tells you that something is wrong; stopped tasks tell you what.
+    - action: UpdateService
+      min_count: 3
+      message: |
+        You redeployed {count} times. Redeploying the same task definition
+        restarts the same crash; the fix had to be a new revision.
+  missed_key_call: |
+    You fixed it without reading a stopped task. Experienced engineers check
+    stopped tasks first: stoppedReason and the exit code name the failure in
+    one line, and the container logs name the cause.

@@ -1,0 +1,82 @@
+id: ecs-030-add-environment-variable
+title: Switch it on
+difficulty: 2
+estimated_minutes: 15
+topic: Changes to make
+cluster: shop-prod
+brief: |
+  Product wants gift cards live. The application already supports them behind
+  a flag: set the environment variable FEATURE_GIFT_CARDS to on for checkout
+  and deploy it. Change nothing else.
+
+  checkout-api runs in the shop-prod cluster behind the checkout-tg target
+  group. Revision 7 is live and healthy.
+seed: seed.yaml
+success:
+- service_stable:
+    service: checkout-api
+- targets_healthy: &id001
+    target_group: checkout-tg
+- task_def_lineage:
+    service: checkout-api
+    derived_from: 7
+- service_env:
+    service: checkout-api
+    name: FEATURE_GIFT_CARDS
+    value: 'on'
+    message: checkout-api is not running with FEATURE_GIFT_CARDS set to on
+forbid:
+- desired_count_below:
+    service: checkout-api
+    min: 2
+- health_check_disabled: *id001
+- health_check_matcher_widened: *id001
+hints:
+- after_minutes: 5
+  text: Environment variables live in the task definition. Can a registered revision be edited?
+- after_minutes: 10
+  text: Register a new revision that is revision 7 plus one variable. Keep everything else exactly as it is.
+- after_minutes: 15
+  text: A new revision does nothing until the service is updated to use it.
+teaches:
+- 'A task definition revision is immutable: a change means a new revision copied from the old one'
+- Registering a revision deploys nothing; the service must be updated to the new revision
+- Copy the last good revision and change one thing, so anything that breaks has one possible cause
+- Running tasks keep their old environment until they are replaced by the deployment
+on_aws:
+- On AWS a deployment replaces tasks gradually, governed by minimumHealthyPercent and maximumPercent. The lab replaces
+  them all at once.
+- Use 'aws ecs wait services-stable' on AWS to block until the deployment has finished.
+selftest:
+  task: true
+  shortcuts:
+  - name: scale to zero
+    steps:
+    - update_service:
+        service: checkout-api
+        desired_count: 0
+    undo:
+    - update_service:
+        service: checkout-api
+        desired_count: 2
+  solution:
+  - register_revision:
+      base: checkout-api:7
+      set_env:
+        FEATURE_GIFT_CARDS: 'on'
+  - update_service:
+      service: checkout-api
+      task_definition: checkout-api:latest
+replay:
+  first_move: DescribeTaskDefinition
+  notes:
+    DescribeTaskDefinition: the right first move
+  key_call:
+    action: RegisterTaskDefinition
+    note: the change itself
+    describe: making the change
+    reach: make the change
+  efficient_within_seconds: 300
+  time_sinks: []
+  missed_key_call: |
+    You passed without a RegisterTaskDefinition call in the trail, which should not be possible.

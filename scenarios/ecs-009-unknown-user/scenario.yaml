@@ -1,0 +1,120 @@
+id: ecs-009-unknown-user
+title: Running as nobody in particular
+difficulty: 2
+estimated_minutes: 15
+topic: Tasks that never start
+cluster: shop-prod
+brief: |
+  The team pushed a new image. Deploy checkout-api:8 to production.
+
+  checkout-api runs in the shop-prod cluster behind the checkout-tg target
+  group. Revision 7 is live and healthy. Revision 8 is already registered.
+
+  Revision 8 also stops the container running as root.
+seed: seed.yaml
+success:
+- service_stable:
+    service: checkout-api
+- targets_healthy:
+    target_group: checkout-tg
+- task_def_lineage:
+    service: checkout-api
+    derived_from: 8
+forbid:
+- desired_count_below:
+    service: checkout-api
+    min: 2
+- health_check_disabled:
+    target_group: checkout-tg
+- health_check_matcher_widened:
+    target_group: checkout-tg
+- grace_period_above:
+    service: checkout-api
+    max_seconds: 120
+partial:
+- rolled_back:
+    when:
+      task_def_lineage_is:
+        service: checkout-api
+        revision: 7
+    message: |
+      You rolled back, which is the right call during an incident.
+      Now fix revision 8 and deploy it properly.
+hints:
+- after_minutes: 5
+  text: The new tasks never reach RUNNING. What does a stopped one say?
+- after_minutes: 10
+  text: stoppedReason quotes the container runtime. It names something it looked for inside the image.
+- after_minutes: 15
+  text: Which field in revision 8 refers to that name? The image does have an unprivileged user, called app.
+teaches:
+- The user field tells the container which user to run as; the user must exist in the image
+- A user that does not exist fails at container start with a runtime error, before the application runs
+- Running as a non-root user is good practice, but the user has to be created when the image is built
+- No application logs exist for a container that never started
+on_aws:
+- On AWS the stoppedReason begins with CannotStartContainerError and quotes the same runtime message.
+- 'A crash-looping service is slowed down on AWS: ECS waits longer between launches after repeated failures. The
+  lab relaunches every few seconds.'
+selftest:
+  trap: &id001
+  - update_service:
+      service: checkout-api
+      task_definition: checkout-api:8
+  broken:
+  - stopped_task_with:
+      service: checkout-api
+      stop_code: TaskFailedToStart
+      stopped_reason_contains: unable to find user
+  - not:
+      task_def_lineage_is:
+        service: checkout-api
+        revision: 7
+  shortcuts:
+  - name: roll back to revision 7
+    expect: partial
+    steps:
+    - update_service:
+        service: checkout-api
+        task_definition: checkout-api:7
+    undo: *id001
+  - name: scale to zero
+    steps:
+    - update_service:
+        service: checkout-api
+        desired_count: 0
+    undo:
+    - update_service:
+        service: checkout-api
+        desired_count: 2
+  solution:
+  - register_revision:
+      base: checkout-api:8
+      set:
+        user: app
+  - update_service:
+      service: checkout-api
+      task_definition: checkout-api:latest
+replay:
+  first_move: DescribeServices
+  notes:
+    DescribeServices: the right first move
+  key_call:
+    action: DescribeTasks
+    detail: stopped
+    note: the answer was here
+  missed_key_call: |
+    You fixed it without reading a stopped task. stoppedReason, the stop code and the
+    exit code name the failure in one line; check them first next time.
+  efficient_within_seconds: 180
+  time_sinks:
+  - action: DescribeTargetHealth
+    min_seconds: 120
+    message: |
+      You spent {minutes} on target health before reading a stopped task.
+      Missing targets are a symptom here: no task stayed up long enough to register.
+  - action: UpdateService
+    min_count: 4
+    message: |
+      You redeployed {count} times. Redeploying the same configuration
+      repeats the same failure; change something first.

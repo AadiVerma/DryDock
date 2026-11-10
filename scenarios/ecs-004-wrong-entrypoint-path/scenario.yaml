@@ -1,0 +1,132 @@
+id: ecs-004-wrong-entrypoint-path
+title: It starts, then it doesn't
+difficulty: 2
+estimated_minutes: 20
+topic: Tasks that start and then die
+cluster: shop-prod
+brief: |
+  The team pushed a new image. Deploy checkout-api:8 to production.
+
+  checkout-api runs in the shop-prod cluster behind the checkout-tg target
+  group. Revision 7 is live and healthy. Revision 8 is already registered.
+seed: seed.yaml
+success:
+- service_stable:
+    service: checkout-api
+- targets_healthy:
+    target_group: checkout-tg
+- task_def_lineage:
+    service: checkout-api
+    derived_from: 8
+forbid:
+- desired_count_below:
+    service: checkout-api
+    min: 2
+- health_check_disabled:
+    target_group: checkout-tg
+- health_check_matcher_widened:
+    target_group: checkout-tg
+- grace_period_above:
+    service: checkout-api
+    max_seconds: 120
+partial:
+- rolled_back:
+    when:
+      task_def_lineage_is:
+        service: checkout-api
+        revision: 7
+    message: |
+      You rolled back, which is the right call during an incident.
+      Now fix revision 8 and deploy it properly.
+hints:
+- after_minutes: 5
+  text: Stopped tasks have an exit code as well as a reason. What is it?
+- after_minutes: 10
+  text: The container did start this time, so it had the chance to say something. Where do its logs go?
+- after_minutes: 15
+  text: The log names a file. Does revision 7 run the same file?
+teaches:
+- '''Essential container in task exited'' means the container started and then quit; the exit code says how'
+- Exit code 2 from an interpreter usually means it could not open the script it was told to run
+- When the container starts, its own logs explain the exit; when it never starts, stoppedReason does
+- The log stream for a task is named prefix/container/task-id
+on_aws:
+- 'A crash-looping service is slowed down on AWS: ECS waits longer between launches after repeated failures. The
+  lab relaunches every few seconds.'
+- The service's Events tab on AWS names the failure (for example 'tasks failed to start'). In the lab, events only
+  ever say the service reached a steady state.
+- With the deployment circuit breaker enabled, AWS marks the deployment FAILED and rolls back by itself. The lab
+  always reports the rollout as completed, so never trust that field here.
+selftest:
+  trap: &id001
+  - update_service:
+      service: checkout-api
+      task_definition: checkout-api:8
+  broken:
+  - stopped_task_with:
+      service: checkout-api
+      stopped_reason_contains: Essential container
+      exit_code: 2
+  - log_contains:
+      log_group: /ecs/checkout-api
+      text: can't open file '/app/main.py'
+  - not:
+      task_def_lineage_is:
+        service: checkout-api
+        revision: 7
+  shortcuts:
+  - name: roll back to revision 7
+    expect: partial
+    steps:
+    - update_service:
+        service: checkout-api
+        task_definition: checkout-api:7
+    undo: *id001
+  - name: scale to zero
+    steps:
+    - update_service:
+        service: checkout-api
+        desired_count: 0
+    undo:
+    - update_service:
+        service: checkout-api
+        desired_count: 2
+  solution:
+  - register_revision:
+      base: checkout-api:8
+      set:
+        command:
+        - python
+        - /app/server.py
+  - update_service:
+      service: checkout-api
+      task_definition: checkout-api:latest
+replay:
+  first_move: DescribeServices
+  notes:
+    DescribeServices: the right first move
+  key_call:
+    action: DescribeTasks
+    detail: stopped
+    note: the failure was visible here
+  missed_key_call: |
+    You fixed it without reading a stopped task. stoppedReason, the stop code and the
+    exit code name the failure in one line; check them first next time.
+  answer_call:
+    action: GetLogEvents
+    alternatives:
+    - FilterLogEvents
+    - StartLiveTail
+    note: the answer was here
+  efficient_within_seconds: 180
+  time_sinks:
+  - action: DescribeTargetHealth
+    min_seconds: 120
+    message: |
+      You spent {minutes} on target health before reading a stopped task.
+      Missing targets are a symptom here: no task stayed up long enough to register.
+  - action: UpdateService
+    min_count: 4
+    message: |
+      You redeployed {count} times. Redeploying the same configuration
+      repeats the same failure; change something first.

@@ -1,0 +1,127 @@
+id: ecs-010-wrong-port
+title: Green deploy, dead site
+difficulty: 3
+estimated_minutes: 25
+topic: Running but not serving
+cluster: shop-prod
+brief: |
+  The team pushed a new image. Deploy checkout-api:8 to production.
+
+  checkout-api runs in the shop-prod cluster behind the checkout-tg target
+  group. Revision 7 is live and healthy. Revision 8 is already registered.
+
+  After you deploy, check that customers can still reach checkout.
+seed: seed.yaml
+success:
+- service_stable:
+    service: checkout-api
+- targets_healthy:
+    target_group: checkout-tg
+- task_def_lineage:
+    service: checkout-api
+    derived_from: 8
+forbid:
+- desired_count_below:
+    service: checkout-api
+    min: 2
+- health_check_disabled:
+    target_group: checkout-tg
+- health_check_matcher_widened:
+    target_group: checkout-tg
+- grace_period_above:
+    service: checkout-api
+    max_seconds: 120
+partial:
+- rolled_back:
+    when:
+      task_def_lineage_is:
+        service: checkout-api
+        revision: 7
+    message: |
+      You rolled back, which is the right call during an incident.
+      Now fix revision 8 and deploy it properly.
+hints:
+- after_minutes: 5
+  text: The service says everything is running. Ask the load balancer whether it agrees.
+- after_minutes: 10
+  text: The targets are registered on a port. Is the application answering on that port?
+- after_minutes: 15
+  text: The application logs which port it listens on. Compare that with the port mapping in the task definition.
+teaches:
+- 'Running tasks do not mean a working service: the load balancer decides whether traffic can reach them'
+- describe-target-health shows each target's state and the reason it is failing
+- The containerPort in the task definition must be the port the application really listens on
+- The application's own startup log is the quickest way to see what it actually bound to
+on_aws:
+- On AWS, ECS stops and replaces tasks whose targets fail the load balancer health check, with 'failed ELB health
+  checks' in stoppedReason and the service events. The lab leaves those tasks running.
+- 'Because of that, on AWS this deployment would not look green for long: the new tasks would be cycled and the
+  events would say why.'
+selftest:
+  trap: &id001
+  - update_service:
+      service: checkout-api
+      task_definition: checkout-api:8
+  broken:
+  - targets_unhealthy:
+      target_group: checkout-tg
+  - log_contains:
+      log_group: /ecs/checkout-api
+      text: listening on port 9000
+  - not:
+      task_def_lineage_is:
+        service: checkout-api
+        revision: 7
+  shortcuts:
+  - name: roll back to revision 7
+    expect: partial
+    steps:
+    - update_service:
+        service: checkout-api
+        task_definition: checkout-api:7
+    undo: *id001
+  - name: scale to zero
+    steps:
+    - update_service:
+        service: checkout-api
+        desired_count: 0
+    undo:
+    - update_service:
+        service: checkout-api
+        desired_count: 2
+  solution:
+  - register_revision:
+      base: checkout-api:8
+      set_env:
+        PORT: '8080'
+  - update_service:
+      service: checkout-api
+      task_definition: checkout-api:latest
+replay:
+  first_move: DescribeServices
+  notes:
+    DescribeServices: the right first move
+  key_call:
+    action: DescribeTargetHealth
+    note: the symptom was visible here
+  missed_key_call: |
+    You fixed it without looking at target health. When a service looks fine but
+    customers see errors, the load balancer's view of its targets is the first place to look.
+  answer_call:
+    action: GetLogEvents
+    alternatives:
+    - FilterLogEvents
+    - StartLiveTail
+    note: the answer was here
+  efficient_within_seconds: 180
+  time_sinks:
+  - action: DescribeTasks
+    min_seconds: 180
+    message: |
+      You spent {minutes} on tasks before looking at target health.
+      The tasks were running; the load balancer was the one that disagreed.
+  - action: UpdateService
+    min_count: 4
+    message: |
+      You redeployed {count} times. Redeploying the same configuration
+      repeats the same failure; change something first.

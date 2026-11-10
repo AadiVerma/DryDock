@@ -1,0 +1,36 @@
+# ECS Lab — Floci with the Docker socket mounted so ECS tasks run as real containers.
+#
+# Pinned to the version preflight was run against (10 Nov 2026). Override with
+# FLOCI_IMAGE=floci/floci:latest to test a newer release, then rerun preflight.
+services:
+  floci:
+    image: ${FLOCI_IMAGE:-floci/floci:2.4.0}
+    container_name: ecslab-floci
+    user: root
+    ports:
+      - "4566:4566"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      FLOCI_STORAGE_MODE: memory
+      FLOCI_DEFAULT_REGION: us-east-1
+      # Task containers join this network so Floci's in-process ALB can reach
+      # them for health checks. Without it the checks cannot connect at all.
+      FLOCI_SERVICES_DOCKER_NETWORK: ecslab
+      FLOCI_SERVICES_ECS_DOCKER_NETWORK: ecslab
+      # The task image is built locally and exists in no registry. The default
+      # behaviour tries to pull on every launch; this uses the local copy.
+      FLOCI_SERVICES_ECS_IMAGE_PULL_BEHAVIOR: prefer-cached
+      # Off by default. The second probe (preflight/classes2.py) turns these on one
+      # at a time to find out what Floci does with them.
+      FLOCI_SERVICES_IAM_ENFORCEMENT_ENABLED: ${ECSLAB_IAM_ENFORCEMENT:-false}
+      FLOCI_SERVICES_ECS_TASK_ROLE_CREDENTIALS_ENABLED: ${ECSLAB_TASK_ROLE_CREDENTIALS:-false}
+      FLOCI_NETWORK_SECURITY_GROUP_ENFORCEMENT_ENABLED: ${ECSLAB_SG_ENFORCEMENT:-false}
+      # No web console: ECS Lab is terminal-only in v0.
+      FLOCI_SERVICES_UI_ENABLED: "false"
+    networks:
+      - ecslab
+
+networks:
+  ecslab:
+    name: ecslab

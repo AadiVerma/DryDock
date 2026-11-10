@@ -1,0 +1,131 @@
+id: ecs-025-crash-after-start
+title: Fine for fifteen seconds
+difficulty: 4
+estimated_minutes: 30
+topic: Tasks that start and then die
+cluster: shop-prod
+brief: |
+  The team pushed a new image. Deploy checkout-api:8 to production.
+
+  checkout-api runs in the shop-prod cluster behind the checkout-tg target
+  group. Revision 7 is live and healthy. Revision 8 is already registered.
+seed: seed.yaml
+success:
+- service_stable:
+    service: checkout-api
+    min_uptime_seconds: 40
+- targets_healthy:
+    target_group: checkout-tg
+- task_def_lineage:
+    service: checkout-api
+    derived_from: 8
+forbid:
+- desired_count_below:
+    service: checkout-api
+    min: 2
+- health_check_disabled:
+    target_group: checkout-tg
+- health_check_matcher_widened:
+    target_group: checkout-tg
+- grace_period_above:
+    service: checkout-api
+    max_seconds: 120
+partial:
+- rolled_back:
+    when:
+      task_def_lineage_is:
+        service: checkout-api
+        revision: 7
+    message: |
+      You rolled back, which is the right call during an incident.
+      Now fix revision 8 and deploy it properly.
+hints:
+- after_minutes: 5
+  text: The service looks healthy if you glance at it. Look at how long its tasks have been running.
+- after_minutes: 10
+  text: Stopped tasks are piling up with the same exit code. It is not the usual startup failure.
+- after_minutes: 15
+  text: The app logs an error some seconds after it starts listening. Read past the startup lines.
+teaches:
+- 'A service can report all tasks running while each one dies seconds later: check task age and the stopped list'
+- A crash after startup leaves the startup log lines looking normal; the error comes later in the stream
+- The exit code distinguishes this failure from a startup failure
+- A service is stable when the same tasks are still running a minute later, not when the count is right
+on_aws:
+- AWS deregisters the targets of stopped tasks. The lab can leave them in the target group as unhealthy, so count
+  healthy targets rather than expecting an empty list.
+- On AWS, ECS stops and replaces tasks whose targets fail the load balancer health check, with 'failed ELB health
+  checks' in stoppedReason and the service events. The lab leaves those tasks running.
+- 'A crash-looping service is slowed down on AWS: ECS waits longer between launches after repeated failures. The
+  lab relaunches every few seconds.'
+selftest:
+  trap: &id001
+  - update_service:
+      service: checkout-api
+      task_definition: checkout-api:8
+  broken:
+  - stopped_task_with:
+      service: checkout-api
+      stopped_reason_contains: Essential container
+      exit_code: 3
+  - log_contains:
+      log_group: /ecs/checkout-api
+      text: invalid schedule
+  - not:
+      task_def_lineage_is:
+        service: checkout-api
+        revision: 7
+  shortcuts:
+  - name: roll back to revision 7
+    expect: partial
+    steps:
+    - update_service:
+        service: checkout-api
+        task_definition: checkout-api:7
+    undo: *id001
+  - name: scale to zero
+    steps:
+    - update_service:
+        service: checkout-api
+        desired_count: 0
+    undo:
+    - update_service:
+        service: checkout-api
+        desired_count: 2
+  solution:
+  - register_revision:
+      base: checkout-api:8
+      set_env:
+        REPORT_SCHEDULE: '*/5 * * * *'
+  - update_service:
+      service: checkout-api
+      task_definition: checkout-api:latest
+replay:
+  first_move: DescribeServices
+  notes:
+    DescribeServices: the right first move
+  key_call:
+    action: DescribeTasks
+    detail: stopped
+    note: the failure was visible here
+  missed_key_call: |
+    You fixed it without reading a stopped task. stoppedReason, the stop code and the
+    exit code name the failure in one line; check them first next time.
+  answer_call:
+    action: GetLogEvents
+    alternatives:
+    - FilterLogEvents
+    - StartLiveTail
+    note: the answer was here
+  efficient_within_seconds: 180
+  time_sinks:
+  - action: DescribeTargetHealth
+    min_seconds: 120
+    message: |
+      You spent {minutes} on target health before reading a stopped task.
+      Missing targets are a symptom here: no task stayed up long enough to register.
+  - action: UpdateService
+    min_count: 4
+    message: |
+      You redeployed {count} times. Redeploying the same configuration
+      repeats the same failure; change something first.

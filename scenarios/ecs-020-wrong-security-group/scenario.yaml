@@ -1,0 +1,94 @@
+id: ecs-020-wrong-security-group
+title: In the wrong group
+difficulty: 3
+estimated_minutes: 25
+topic: Security groups
+cluster: shop-prod
+brief: |
+  Checkout stopped answering after a network change this afternoon. The tasks
+  were replaced as part of that change and the new ones are running.
+
+  checkout-api runs in the shop-prod cluster behind the checkout-tg target group.
+  Its tasks belong in the checkout-sg security group.
+seed: seed.yaml
+success:
+- service_stable:
+    service: checkout-api
+- targets_healthy: &id001
+    target_group: checkout-tg
+- service_uses_security_group:
+    service: checkout-api
+    group: checkout-sg
+forbid:
+- desired_count_below:
+    service: checkout-api
+    min: 2
+- health_check_disabled: *id001
+- health_check_matcher_widened: *id001
+- security_group_too_open:
+    group: default
+- security_group_too_open:
+    group: checkout-sg
+hints:
+- after_minutes: 5
+  text: The load balancer's health checks are timing out. The application did not change.
+- after_minutes: 10
+  text: Which security group are the running tasks in? The service's network configuration says.
+- after_minutes: 15
+  text: The rules on checkout-sg are fine. Are the tasks actually using it?
+teaches:
+- A service's security groups are part of its network configuration, set on the service, not the task definition
+- Correct rules on the right group do nothing if the tasks are in a different group
+- Changing a service's network configuration replaces its tasks
+- Put the tasks back in the right group; do not widen the wrong one until it works
+on_aws:
+- On AWS the load balancer has a security group of its own, and the usual rule allows the task port from that group
+  rather than from 0.0.0.0/0.
+- On AWS, ECS stops and replaces tasks whose targets fail the load balancer health check, with 'failed ELB health
+  checks' in stoppedReason and the service events. The lab leaves those tasks running.
+selftest:
+  broken:
+  - targets_unhealthy: *id001
+  shortcuts:
+  - name: open the default group to everything
+    steps:
+    - set_security_group_ingress:
+        group: default
+        rules:
+        - from_port: 0
+          to_port: 65535
+          cidr: 0.0.0.0/0
+    undo:
+    - set_security_group_ingress:
+        group: default
+        rules: []
+  solution:
+  - update_service:
+      service: checkout-api
+      security_groups:
+      - checkout-sg
+replay:
+  first_move: DescribeServices
+  notes:
+    DescribeServices: the right first move
+  key_call:
+    action: DescribeTargetHealth
+    note: the symptom was visible here
+  missed_key_call: |
+    You fixed it without looking at target health. When a service looks fine but
+    customers see errors, the load balancer's view of its targets is the first place to look.
+  answer_call:
+    action: DescribeServices
+    note: the answer was here
+  efficient_within_seconds: 180
+  time_sinks:
+  - action: DescribeTasks
+    min_seconds: 180
+    message: |
+      You spent {minutes} on tasks before looking at target health.
+      The tasks were running; the load balancer was the one that disagreed.
+  - action: UpdateService
+    min_count: 4
+    message: |
+      You redeployed {count} times. Redeploying the same configuration
+      repeats the same failure; change something first.

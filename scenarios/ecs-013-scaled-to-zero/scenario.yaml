@@ -1,0 +1,72 @@
+id: ecs-013-scaled-to-zero
+title: Where did everybody go
+difficulty: 1
+estimated_minutes: 10
+topic: Running but not serving
+cluster: shop-prod
+brief: |
+  Checkout is completely down. Every request fails. Nothing was deployed.
+
+  checkout-api runs in the shop-prod cluster behind the checkout-tg target group.
+  Production needs two tasks.
+seed: seed.yaml
+success:
+- desired_count_at_least:
+    service: checkout-api
+    min: 2
+- service_stable:
+    service: checkout-api
+- targets_healthy: &id001
+    target_group: checkout-tg
+forbid:
+- health_check_disabled: *id001
+- health_check_matcher_widened: *id001
+hints:
+- after_minutes: 5
+  text: Start with the service. How many tasks does it want, and how many does it have?
+- after_minutes: 10
+  text: A service that wants zero tasks is working exactly as configured.
+- after_minutes: 15
+  text: Stopped tasks record why they were stopped. Were these tasks killed by a failure or asked to stop?
+teaches:
+- 'Read desiredCount before anything else: a service at zero is not broken, it has been told to run nothing'
+- Tasks stopped by a scale-in carry a scheduler stop code, not an application error
+- No targets in a target group can simply mean no tasks exist to register
+- The fastest incidents to fix are the ones where you read the service before you read the logs
+on_aws:
+- The service events on AWS record the change in desired count.
+- CloudTrail on AWS records who made the change and when, which is usually the fastest way to find 'what changed'.
+selftest:
+  broken:
+  - not:
+      desired_count_at_least:
+        service: checkout-api
+        min: 1
+  shortcuts: []
+  solution:
+  - update_service:
+      service: checkout-api
+      desired_count: 2
+replay:
+  first_move: DescribeServices
+  notes:
+    DescribeServices: the right first move
+  key_call:
+    action: DescribeTasks
+    detail: stopped
+    note: the answer was here
+  missed_key_call: |
+    You fixed it without reading a stopped task. stoppedReason, the stop code and the
+    exit code name the failure in one line; check them first next time.
+  efficient_within_seconds: 180
+  time_sinks:
+  - action: DescribeTargetHealth
+    min_seconds: 120
+    message: |
+      You spent {minutes} on target health before reading a stopped task.
+      Missing targets are a symptom here: no task stayed up long enough to register.
+  - action: UpdateService
+    min_count: 4
+    message: |
+      You redeployed {count} times. Redeploying the same configuration
+      repeats the same failure; change something first.

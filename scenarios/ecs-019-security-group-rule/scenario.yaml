@@ -1,0 +1,95 @@
+id: ecs-019-security-group-rule
+title: A tidy-up too far
+difficulty: 3
+estimated_minutes: 20
+topic: Security groups
+cluster: shop-prod
+brief: |
+  Checkout has been returning 504 errors since a security review this morning.
+  The tasks are running and nothing was deployed.
+
+  checkout-api runs in the shop-prod cluster behind the checkout-tg target group.
+  Its tasks are in the checkout-sg security group.
+seed: seed.yaml
+success:
+- service_stable:
+    service: checkout-api
+- targets_healthy: &id001
+    target_group: checkout-tg
+- security_group_allows:
+    group: checkout-sg
+    port: 8080
+forbid:
+- desired_count_below:
+    service: checkout-api
+    min: 2
+- health_check_disabled: *id001
+- health_check_matcher_widened: *id001
+- security_group_too_open:
+    group: checkout-sg
+hints:
+- after_minutes: 5
+  text: The tasks are running. Ask the load balancer why it will not send them traffic.
+- after_minutes: 10
+  text: A target that fails with a timeout never answered at all. What sits between the load balancer and the task?
+- after_minutes: 15
+  text: Compare the security group's inbound rules with the port the health check uses.
+teaches:
+- 'Target.Timeout means the health check got no answer: suspect the network path, not the application'
+- A security group must allow inbound traffic on the container port, or the load balancer cannot reach the task
+- Timeouts point at security groups and routing; wrong responses point at the application
+- Allow the one port the application needs, from where it needs it, and nothing more
+on_aws:
+- On AWS the load balancer has a security group of its own, and the usual rule allows the task port from that group
+  rather than from 0.0.0.0/0.
+- On AWS, ECS stops and replaces tasks whose targets fail the load balancer health check, with 'failed ELB health
+  checks' in stoppedReason and the service events. The lab leaves those tasks running.
+selftest:
+  broken:
+  - targets_unhealthy: *id001
+  shortcuts:
+  - name: open every port
+    steps:
+    - set_security_group_ingress:
+        group: checkout-sg
+        rules:
+        - from_port: 0
+          to_port: 65535
+          cidr: 0.0.0.0/0
+    undo:
+    - set_security_group_ingress:
+        group: checkout-sg
+        rules:
+        - port: 8443
+          cidr: 0.0.0.0/0
+  solution:
+  - set_security_group_ingress:
+      group: checkout-sg
+      rules:
+      - port: 8080
+        cidr: 0.0.0.0/0
+replay:
+  first_move: DescribeServices
+  notes:
+    DescribeServices: the right first move
+  key_call:
+    action: DescribeTargetHealth
+    note: the symptom was visible here
+  missed_key_call: |
+    You fixed it without looking at target health. When a service looks fine but
+    customers see errors, the load balancer's view of its targets is the first place to look.
+  answer_call:
+    action: DescribeSecurityGroups
+    note: the answer was here
+  efficient_within_seconds: 180
+  time_sinks:
+  - action: DescribeTasks
+    min_seconds: 180
+    message: |
+      You spent {minutes} on tasks before looking at target health.
+      The tasks were running; the load balancer was the one that disagreed.
+  - action: UpdateService
+    min_count: 4
+    message: |
+      You redeployed {count} times. Redeploying the same configuration
+      repeats the same failure; change something first.

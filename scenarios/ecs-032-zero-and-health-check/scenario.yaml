@@ -1,0 +1,96 @@
+id: ecs-032-zero-and-health-check
+title: Back up, still down
+difficulty: 3
+estimated_minutes: 25
+topic: More than one thing wrong
+cluster: shop-prod
+brief: |
+  Checkout is completely down after last night's maintenance window. Nothing
+  was deployed. Get it serving customers again.
+
+  checkout-api runs in the shop-prod cluster behind the checkout-tg target group.
+  Production needs two tasks.
+seed: seed.yaml
+success:
+- desired_count_at_least:
+    service: checkout-api
+    min: 2
+- service_stable:
+    service: checkout-api
+- targets_healthy: &id001
+    target_group: checkout-tg
+- health_check_is:
+    target_group: checkout-tg
+    path: /health
+    matcher: '200'
+forbid:
+- health_check_matcher_widened: *id001
+- grace_period_above:
+    service: checkout-api
+    max_seconds: 120
+hints:
+- after_minutes: 5
+  text: 'Start with the service: how many tasks does it want?'
+- after_minutes: 10
+  text: The tasks are back. Before you tell anyone it is fixed, ask the load balancer.
+- after_minutes: 15
+  text: The targets are unhealthy for a reason that has nothing to do with the task count. Read the reason code
+    and the health check settings.
+teaches:
+- Bringing the tasks back is not the same as bringing the service back
+- A fault that was hidden while nothing was running only shows once the first fault is fixed
+- 'Always finish on target health: it is the view your customers get'
+- Two unrelated changes in one maintenance window give you two unrelated faults
+on_aws:
+- On AWS, ECS stops and replaces tasks whose targets fail the load balancer health check, with 'failed ELB health
+  checks' in stoppedReason and the service events. The lab leaves those tasks running.
+- CloudTrail on AWS records who made the change and when, which is usually the fastest way to find 'what changed'.
+selftest:
+  broken:
+  - not:
+      desired_count_at_least:
+        service: checkout-api
+        min: 1
+  shortcuts:
+  - name: accept any response as healthy
+    steps:
+    - modify_target_group:
+        target_group: checkout-tg
+        matcher: 200-499
+    undo:
+    - modify_target_group:
+        target_group: checkout-tg
+        matcher: '200'
+  solution:
+  - update_service:
+      service: checkout-api
+      desired_count: 2
+  - modify_target_group:
+      target_group: checkout-tg
+      path: /health
+replay:
+  first_move: DescribeServices
+  notes:
+    DescribeServices: the right first move
+  key_call:
+    action: DescribeTasks
+    detail: stopped
+    note: the failure was visible here
+  missed_key_call: |
+    You fixed it without reading a stopped task. stoppedReason, the stop code and the
+    exit code name the failure in one line; check them first next time.
+  answer_call:
+    action: DescribeTargetHealth
+    note: the second fault was visible here
+  efficient_within_seconds: 180
+  time_sinks:
+  - action: DescribeTargetHealth
+    min_seconds: 120
+    message: |
+      You spent {minutes} on target health before reading a stopped task.
+      Missing targets are a symptom here: no task stayed up long enough to register.
+  - action: UpdateService
+    min_count: 4
+    message: |
+      You redeployed {count} times. Redeploying the same configuration
+      repeats the same failure; change something first.

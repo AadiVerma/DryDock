@@ -1,0 +1,88 @@
+id: ecs-024-resize-task
+title: More memory, please
+difficulty: 2
+estimated_minutes: 15
+topic: Changes to make
+cluster: shop-prod
+brief: |
+  Checkout needs more headroom for the sale. Give each task 4 GB of memory,
+  keep it on Fargate, and deploy it. Change nothing else.
+
+  checkout-api runs in the shop-prod cluster behind the checkout-tg target
+  group. Revision 7 is live and healthy.
+seed: seed.yaml
+success:
+- service_stable:
+    service: checkout-api
+- targets_healthy: &id001
+    target_group: checkout-tg
+- task_size:
+    service: checkout-api
+    min_memory_mib: 4096
+forbid:
+- desired_count_below:
+    service: checkout-api
+    min: 2
+- health_check_disabled: *id001
+- health_check_matcher_widened: *id001
+hints:
+- after_minutes: 5
+  text: 'Registering the obvious change is refused. Read the refusal: it is about a combination, not a single value.'
+- after_minutes: 10
+  text: On Fargate, memory and CPU are chosen together from a fixed table. Not every pair exists.
+- after_minutes: 15
+  text: Find the smallest CPU value that Fargate offers with 4 GB of memory.
+teaches:
+- Fargate task sizes come in fixed CPU and memory pairs; you cannot change one freely
+- An invalid pair is refused when the task definition is registered, before anything is deployed
+- 0.25 vCPU tops out at 2 GB; 4 GB needs at least 0.5 vCPU
+- A task definition change is only live once the service is updated to the new revision
+on_aws:
+- The Fargate CPU and memory table is the same on AWS, and the refusal comes at registration there too.
+- On AWS a deployment replaces tasks gradually, governed by minimumHealthyPercent and maximumPercent. The lab replaces
+  them all at once.
+selftest:
+  task: true
+  trap:
+  - expect_error:
+      step:
+        register_revision:
+          base: checkout-api:7
+          top:
+            memory: '4096'
+      contains: No Fargate configuration
+  shortcuts:
+  - name: scale to zero
+    steps:
+    - update_service:
+        service: checkout-api
+        desired_count: 0
+    undo:
+    - update_service:
+        service: checkout-api
+        desired_count: 2
+  solution:
+  - register_revision:
+      base: checkout-api:7
+      top:
+        cpu: '512'
+        memory: '4096'
+  - update_service:
+      service: checkout-api
+      task_definition: checkout-api:latest
+replay:
+  first_move: DescribeTaskDefinition
+  notes:
+    DescribeTaskDefinition: the right first move
+  key_call:
+    action: RegisterTaskDefinition
+    note: the change itself
+  efficient_within_seconds: 300
+  time_sinks:
+  - action: RegisterTaskDefinition
+    min_count: 4
+    message: |
+      You tried to register {count} revisions. The refusal names the rule: memory and CPU
+      must be a pair Fargate offers. Look the pair up rather than guessing.
+  missed_key_call: |
+    You passed without registering a new revision, which should not be possible.

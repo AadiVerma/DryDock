@@ -1,0 +1,131 @@
+id: ecs-034-config-and-dependency
+title: Two lines short
+difficulty: 4
+estimated_minutes: 30
+topic: More than one thing wrong
+cluster: shop-prod
+brief: |
+  The team pushed a new image. Deploy checkout-api:8 to production.
+
+  checkout-api runs in the shop-prod cluster behind the checkout-tg target
+  group. Revision 7 is live and healthy. Revision 8 is already registered.
+
+  Checkout calls the inventory service, which other teams run in the same cluster.
+seed: seed.yaml
+success:
+- service_stable:
+    service: checkout-api
+- targets_healthy:
+    target_group: checkout-tg
+- task_def_lineage:
+    service: checkout-api
+    derived_from: 8
+forbid:
+- desired_count_below:
+    service: checkout-api
+    min: 2
+- health_check_disabled:
+    target_group: checkout-tg
+- health_check_matcher_widened:
+    target_group: checkout-tg
+- grace_period_above:
+    service: checkout-api
+    max_seconds: 120
+partial:
+- rolled_back:
+    when:
+      task_def_lineage_is:
+        service: checkout-api
+        revision: 7
+    message: |
+      You rolled back, which is the right call during an incident.
+      Now fix revision 8 and deploy it properly.
+hints:
+- after_minutes: 5
+  text: The new tasks start and exit. The last log line of a stopped task says why.
+- after_minutes: 10
+  text: After your first fix the exit code is the same. Is the log line the same?
+- after_minutes: 15
+  text: The same exit code can come from two different errors. Read the newest task's log, not the one you remember.
+teaches:
+- The same exit code can hide different errors; only the log tells them apart
+- An application checks its configuration in order, so it reports one problem at a time
+- Read the log of the newest stopped task after each fix, never an older one
+- Compare the whole environment of the failing revision with the last good one, not just the line the error names
+on_aws:
+- 'A crash-looping service is slowed down on AWS: ECS waits longer between launches after repeated failures. The
+  lab relaunches every few seconds.'
+- Cloud Map DNS answers are cached for their TTL on AWS, so a recovered or renamed dependency can take up to a minute
+  to resolve.
+selftest:
+  trap: &id001
+  - update_service:
+      service: checkout-api
+      task_definition: checkout-api:8
+  broken:
+  - stopped_task_with:
+      service: checkout-api
+      stopped_reason_contains: Essential container
+      exit_code: 1
+  - log_contains:
+      log_group: /ecs/checkout-api
+      text: missing required environment variable PAYMENTS_API_URL
+  - not:
+      task_def_lineage_is:
+        service: checkout-api
+        revision: 7
+  shortcuts:
+  - name: roll back to revision 7
+    expect: partial
+    steps:
+    - update_service:
+        service: checkout-api
+        task_definition: checkout-api:7
+    undo: *id001
+  - name: scale to zero
+    steps:
+    - update_service:
+        service: checkout-api
+        desired_count: 0
+    undo:
+    - update_service:
+        service: checkout-api
+        desired_count: 2
+  solution:
+  - register_revision:
+      base: checkout-api:8
+      set_env:
+        PAYMENTS_API_URL: https://payments.shop.internal
+        INVENTORY_URL: http://inventory.shop.internal:8080/health
+  - update_service:
+      service: checkout-api
+      task_definition: checkout-api:latest
+replay:
+  first_move: DescribeServices
+  notes:
+    DescribeServices: the right first move
+  key_call:
+    action: DescribeTasks
+    detail: stopped
+    note: the failure was visible here
+  missed_key_call: |
+    You fixed it without reading a stopped task. stoppedReason, the stop code and the
+    exit code name the failure in one line; check them first next time.
+  answer_call:
+    action: GetLogEvents
+    alternatives:
+    - FilterLogEvents
+    - StartLiveTail
+    note: the answer was here
+  efficient_within_seconds: 180
+  time_sinks:
+  - action: DescribeTargetHealth
+    min_seconds: 120
+    message: |
+      You spent {minutes} on target health before reading a stopped task.
+      Missing targets are a symptom here: no task stayed up long enough to register.
+  - action: UpdateService
+    min_count: 4
+    message: |
+      You redeployed {count} times. Redeploying the same configuration
+      repeats the same failure; change something first.

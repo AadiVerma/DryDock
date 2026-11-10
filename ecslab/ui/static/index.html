@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ECS Lab</title>
+<script>try { var t = localStorage.getItem("ecslab-theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}</script>
+<link rel="stylesheet" href="/vendor/xterm.css">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="mark" aria-hidden="true"></span>ECS Lab</div>
+  <span class="tag" title="This is a local training environment. It is not the AWS Management Console.">Training simulator · not AWS</span>
+  <div class="scenario" id="scenario-title"></div>
+  <div class="spacer"></div>
+  <div class="clock" id="clock" title="Time since the scenario started"></div>
+  <button id="btn-hint" class="btn" hidden>Hint</button>
+  <button id="btn-check" class="btn primary" hidden>Check my fix</button>
+  <button id="btn-reset" class="btn quiet" hidden>Reset</button>
+  <button id="btn-trail" class="btn" aria-expanded="false" aria-controls="trail-panel" title="Show or hide the list of AWS calls you have made">Trail <span class="badge" id="trail-count">0</span></button>
+  <button id="btn-theme" class="btn icon" aria-label="Switch theme" title="Switch theme"></button>
+</header>
+
+<div class="body">
+  <nav class="side" id="nav" aria-label="Sections"></nav>
+  <main id="main" tabindex="-1">
+    <div id="flashes" aria-label="Notifications"></div>
+    <div id="view"></div>
+  </main>
+  <aside class="trail" id="trail-panel" aria-label="Your trail" hidden>
+    <div class="row"><h2 style="margin:0">Your trail</h2><span class="spacer"></span><button class="btn quiet small" id="trail-close" aria-label="Hide trail">Hide</button></div>
+    <p class="muted small" style="margin-top:8px">A lab feature, not part of AWS. Every AWS call you make, typed or clicked, is recorded here and used to build your replay.</p>
+    <div class="legend"><span>read</span><span class="w">change</span><span class="e">error</span></div>
+    <p class="empty" id="trail-empty">Nothing yet. Your first call will show up here.</p>
+    <ol id="trail"></ol>
+  </aside>
+</div>
+
+<section class="term" id="term">
+  <div class="term-bar">
+    <strong>Terminal</strong>
+    <span class="muted small" id="term-note">AWS CLI is already pointed at the lab. Try: aws ecs list-clusters</span>
+    <span class="spacer"></span>
+    <button class="btn quiet small" id="term-reconnect" hidden>Reconnect</button>
+    <button class="btn quiet small" id="term-toggle" aria-expanded="true">Hide</button>
+  </div>
+  <div id="xterm"></div>
+</section>
+
+<dialog id="dlg" aria-label="Confirm"></dialog>
+<div id="toast" role="status" aria-live="polite"></div>
+<script src="/vendor/xterm.js"></script>
+<script src="/vendor/addon-fit.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

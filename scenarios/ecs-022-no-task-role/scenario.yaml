@@ -1,0 +1,130 @@
+id: ecs-022-no-task-role
+title: Who am I
+difficulty: 3
+estimated_minutes: 20
+topic: IAM
+cluster: shop-prod
+brief: |
+  The team pushed a new image. Deploy checkout-api:8 to production.
+
+  checkout-api runs in the shop-prod cluster behind the checkout-tg target
+  group. Revision 7 is live and healthy. Revision 8 is already registered.
+
+  The new version stores receipts in the shop-receipts S3 bucket.
+seed: seed.yaml
+success:
+- service_stable:
+    service: checkout-api
+- targets_healthy:
+    target_group: checkout-tg
+- task_def_lineage:
+    service: checkout-api
+    derived_from: 8
+forbid:
+- desired_count_below:
+    service: checkout-api
+    min: 2
+- health_check_disabled:
+    target_group: checkout-tg
+- health_check_matcher_widened:
+    target_group: checkout-tg
+- grace_period_above:
+    service: checkout-api
+    max_seconds: 120
+partial:
+- rolled_back:
+    when:
+      task_def_lineage_is:
+        service: checkout-api
+        revision: 7
+    message: |
+      You rolled back, which is the right call during an incident.
+      Now fix revision 8 and deploy it properly.
+hints:
+- after_minutes: 5
+  text: The app exits at startup with an error about credentials, not about permissions.
+- after_minutes: 10
+  text: Where does an application in an ECS task get its AWS credentials from?
+- after_minutes: 15
+  text: Compare revision 7 and revision 8 at the task level, outside the container definition.
+teaches:
+- '''Unable to locate credentials'' means there is no identity at all, which is different from AccessDenied'
+- A task gets AWS credentials from its task role; without taskRoleArn there are none
+- 'The task role and the execution role are different: one is for the app, the other is for ECS itself'
+- taskRoleArn is a task-level field, easy to lose when a task definition is rewritten
+on_aws:
+- On AWS, an app with no task role on EC2-backed ECS can silently fall back to the instance's role. On Fargate there
+  is no fallback, as here.
+- 'A crash-looping service is slowed down on AWS: ECS waits longer between launches after repeated failures. The
+  lab relaunches every few seconds.'
+selftest:
+  trap: &id001
+  - update_service:
+      service: checkout-api
+      task_definition: checkout-api:8
+  broken:
+  - stopped_task_with:
+      service: checkout-api
+      stopped_reason_contains: Essential container
+      exit_code: 1
+  - log_contains:
+      log_group: /ecs/checkout-api
+      text: Unable to locate credentials
+  - not:
+      task_def_lineage_is:
+        service: checkout-api
+        revision: 7
+  shortcuts:
+  - name: roll back to revision 7
+    expect: partial
+    steps:
+    - update_service:
+        service: checkout-api
+        task_definition: checkout-api:7
+    undo: *id001
+  - name: scale to zero
+    steps:
+    - update_service:
+        service: checkout-api
+        desired_count: 0
+    undo:
+    - update_service:
+        service: checkout-api
+        desired_count: 2
+  solution:
+  - register_revision:
+      base: checkout-api:8
+      top:
+        taskRoleArn: arn:aws:iam::000000000000:role/checkout-task-role
+  - update_service:
+      service: checkout-api
+      task_definition: checkout-api:latest
+replay:
+  first_move: DescribeServices
+  notes:
+    DescribeServices: the right first move
+  key_call:
+    action: DescribeTasks
+    detail: stopped
+    note: the failure was visible here
+  missed_key_call: |
+    You fixed it without reading a stopped task. stoppedReason, the stop code and the
+    exit code name the failure in one line; check them first next time.
+  answer_call:
+    action: GetLogEvents
+    alternatives:
+    - FilterLogEvents
+    - StartLiveTail
+    note: the answer was here
+  efficient_within_seconds: 180
+  time_sinks:
+  - action: DescribeTargetHealth
+    min_seconds: 120
+    message: |
+      You spent {minutes} on target health before reading a stopped task.
+      Missing targets are a symptom here: no task stayed up long enough to register.
+  - action: UpdateService
+    min_count: 4
+    message: |
+      You redeployed {count} times. Redeploying the same configuration
+      repeats the same failure; change something first.

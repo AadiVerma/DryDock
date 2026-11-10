@@ -1,0 +1,75 @@
+id: ecs-029-scale-out
+title: Four for the sale
+difficulty: 1
+estimated_minutes: 10
+topic: Changes to make
+cluster: shop-prod
+brief: |
+  The sale starts tonight. Run four checkout tasks instead of two, and make
+  sure all four are taking traffic before you call it done.
+
+  checkout-api runs in the shop-prod cluster behind the checkout-tg target
+  group. Revision 7 is live and healthy.
+seed: seed.yaml
+success:
+- desired_count_at_least:
+    service: checkout-api
+    min: 4
+- service_running:
+    service: checkout-api
+    min: 4
+- service_stable:
+    service: checkout-api
+- targets_healthy: &id001
+    target_group: checkout-tg
+forbid:
+- desired_count_below:
+    service: checkout-api
+    min: 2
+- health_check_disabled: *id001
+- health_check_matcher_widened: *id001
+hints:
+- after_minutes: 5
+  text: Scaling is a change to the service, not to the task definition.
+- after_minutes: 10
+  text: The service has a desired count. Changing it does not need a new deployment.
+- after_minutes: 15
+  text: 'After the change, wait: new tasks have to start and then pass the load balancer''s health checks.'
+teaches:
+- The number of tasks is the service's desiredCount; the task definition does not know how many copies run
+- Scaling out starts new tasks from the task definition the service already uses
+- A new task takes traffic only once its target is healthy in the target group, which is later than RUNNING
+- Done means the load balancer agrees, not that the API call returned
+on_aws:
+- On AWS, scaling out can also fail for lack of capacity or subnet IP addresses; the service events say so.
+- Production services usually scale through Application Auto Scaling, which will undo a manual change if its own
+  target disagrees.
+selftest:
+  task: true
+  shortcuts:
+  - name: scale to zero
+    steps:
+    - update_service:
+        service: checkout-api
+        desired_count: 0
+    undo:
+    - update_service:
+        service: checkout-api
+        desired_count: 2
+  solution:
+  - update_service:
+      service: checkout-api
+      desired_count: 4
+replay:
+  first_move: DescribeServices
+  notes:
+    DescribeServices: the right first move
+  key_call:
+    action: UpdateService
+    note: the change itself
+    describe: making the change
+    reach: make the change
+  efficient_within_seconds: 300
+  time_sinks: []
+  missed_key_call: |
+    You passed without a UpdateService call in the trail, which should not be possible.

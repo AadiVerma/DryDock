@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ecslab"
+version = "0.1.0"
+description = "A local ECS training simulator: real containers, deliberately broken deployments"
+requires-python = ">=3.10"
+dependencies = ["boto3>=1.35", "PyYAML>=6.0", "click>=8.1"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+ecslab = "ecslab.cli:main"
+
+[tool.setuptools]
+packages = ["ecslab", "ecslab.ui"]
+
+[tool.setuptools.package-data]
+"ecslab.ui" = ["static/*", "static/vendor/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

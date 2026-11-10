@@ -1,0 +1,98 @@
+id: ecs-031-add-secret
+title: Out of the environment
+difficulty: 3
+estimated_minutes: 20
+topic: Changes to make
+cluster: shop-prod
+brief: |
+  Checkout needs the payments API key. It is already stored in Parameter Store
+  as /shop/prod/payments/api-key. Give it to the container as PAYMENTS_API_KEY
+  and deploy. The key must not appear in the task definition in plain text.
+
+  checkout-api runs in the shop-prod cluster behind the checkout-tg target
+  group. Revision 7 is live and healthy.
+seed: seed.yaml
+success:
+- service_stable:
+    service: checkout-api
+- targets_healthy: &id001
+    target_group: checkout-tg
+- task_def_lineage:
+    service: checkout-api
+    derived_from: 7
+- service_secret:
+    service: checkout-api
+    name: PAYMENTS_API_KEY
+    value_from_contains: /shop/prod/payments/api-key
+forbid:
+- desired_count_below:
+    service: checkout-api
+    min: 2
+- health_check_disabled: *id001
+- health_check_matcher_widened: *id001
+hints:
+- after_minutes: 5
+  text: A container definition has two lists that become environment variables. Only one of them holds values.
+- after_minutes: 10
+  text: 'The secrets list maps a variable name to valueFrom: a reference to a parameter or secret, not its value.'
+- after_minutes: 15
+  text: For Parameter Store the reference is the parameter's ARN. Register the revision, then deploy it.
+teaches:
+- secrets in a container definition gives the container an environment variable whose value ECS fetches at start
+- valueFrom is a reference (a Parameter Store or Secrets Manager ARN); the value never appears in the task definition
+- Anyone who can read a task definition can read its environment, which is why keys do not belong there
+- A wrong reference is only discovered when a task starts, so watch the first task of the deployment
+on_aws:
+- On AWS the execution role must also be allowed to read the secret or parameter; without it you get the same ResourceInitializationError
+  with AccessDenied in the text. The lab does not check the execution role.
+- On AWS a deployment replaces tasks gradually, governed by minimumHealthyPercent and maximumPercent. The lab replaces
+  them all at once.
+selftest:
+  task: true
+  shortcuts:
+  - name: scale to zero
+    steps:
+    - update_service:
+        service: checkout-api
+        desired_count: 0
+    undo:
+    - update_service:
+        service: checkout-api
+        desired_count: 2
+  - name: put the key in a plain environment variable
+    expect: failing
+    timeout: 60
+    steps:
+    - register_revision:
+        base: checkout-api:7
+        set_env:
+          PAYMENTS_API_KEY: pk_live_4f2a9c
+    - &id002
+      update_service:
+        service: checkout-api
+        task_definition: checkout-api:latest
+    undo:
+    - update_service:
+        service: checkout-api
+        task_definition: checkout-api:7
+  solution:
+  - register_revision:
+      base: checkout-api:7
+      set:
+        secrets:
+        - name: PAYMENTS_API_KEY
+          valueFrom: arn:aws:ssm:us-east-1:000000000000:parameter/shop/prod/payments/api-key
+  - *id002
+replay:
+  first_move: DescribeTaskDefinition
+  notes:
+    DescribeTaskDefinition: the right first move
+  key_call:
+    action: RegisterTaskDefinition
+    note: the change itself
+    describe: making the change
+    reach: make the change
+  efficient_within_seconds: 300
+  time_sinks: []
+  missed_key_call: |
+    You passed without a RegisterTaskDefinition call in the trail, which should not be possible.
